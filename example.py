@@ -1,38 +1,52 @@
-from pprint import pprint
-from dataclasses import asdict
+import requests
+import json
 
+def correct_text(input_text):
+    url = "https://mgc.hpc.ut.ee/v1/completions"
+    auth = ('mgc', 'MGCpass')
+    data = {
+        "model": "tartuNLP/Llammas-base-p1-GPT-4o-human-error-mix-paragraph-GEC",
+        "prompt": f"### Instruction:\nReply with a corrected version of the input essay in Estonian with all grammatical and spelling errors fixed. If there are no errors, reply with a copy of the original essay.\n\n### Input:\n{input_text}\n\n### Response:\n",
+        "max_tokens": 1000,
+        "temperature": 0.5
+    }
+    response = requests.post(url, auth=auth, headers={"Content-Type": "application/json"}, data=json.dumps(data))
+    return response.json()["choices"][0]["text"].strip() if response.status_code == 200 else None
 
-def run_multiple_correction_model(source_text):
-    from gec_worker import GEC, read_gec_config
-    from gec_worker import Speller, read_speller_config
-    from gec_worker import CorrectionList, read_correction_list_config
-    from gec_worker.dataclasses import Request
-    from gec_worker import MultiCorrector
+def generate_correction_log(original, corrected):
+    url = "http://artemis20.hpc.ut.ee:8000/v1/completions"
+    data = {
+        "model": "tartuNLP/Llammas-base-p1-GPT-4o-human-error-pseudo-m2",
+        "prompt": f"### Instruction:\nSa võrdled kahte eestikeelset lauset: keeleõppija kirjutatud algne lause ja parandatud lause. Genereeri vea kaupa paranduste loend.\n\n### Input:\nAlgne tekst: {original}\n\nParandatud tekst: {corrected}\n\n### Response:\n",
+        "max_tokens": 200,
+        "temperature": 0.8
+    }
+    response = requests.post(url, headers={"Content-Type": "application/json"}, data=json.dumps(data))
+    return response.json()["choices"][0]["text"].strip() if response.status_code == 200 else None
 
-    # Load grammatical error correction model, use models/GEC-noisy-nmt-ut.yaml to use the other model
-    gec_config = read_gec_config('models/GEC-nelb-1.3b.yaml')
-    gec = GEC(gec_config)
+def explain_correction(original, corrected, correction_details, specific_correction):
+    url = "http://artemis20.hpc.ut.ee:8001/v1/completions"
+    data = {
+        "model": "tartuNLP/Llammas-base-p1-GPT-4o-human-error-explain-from-pseudo-m2",
+        "prompt": f"### Instruction:\nSa võrdled kahte eestikeelset lauset: keeleõppija kirjutatud algne lause ja parandatud lause. Selgita ühte parandust.\n\n### Input:\nAlgne lause: {original}\n\nParandatud lause: {corrected}\n\nParandused:\n{correction_details}\n\n{specific_correction}\n\n### Response:\n1. Pikem selgitus (keeleline põhjendus, miks parandust vaja on).\n2. Lühike selgitus (lihtsustatud, et keeleõppija saaks paremini aru).\n3. Vealiik (nt. käändevorm, tegusõna vorm, õigekiri).",
+        "max_tokens": 400,
+        "temperature": 0.9
+    }
+    response = requests.post(url, headers={"Content-Type": "application/json"}, data=json.dumps(data))
+    return response.json()["choices"][0]["text"].strip() if response.status_code == 200 else None
 
-    # Load spelling model
-    speller_config = read_speller_config("models/spell_etnc19_reference_corpus_model_6000000_lines.yaml")
-    speller = Speller(speller_config)
-
-    # Load correction list
-    correction_list_config = read_correction_list_config('models/correction_list_min3.yaml')
-    correction_list = CorrectionList(correction_list_config)
-
-    # Make model list and add models
-    multi_corrector = MultiCorrector()
-    multi_corrector.add_corrector(correction_list)
-    multi_corrector.add_corrector(speller)
-    multi_corrector.add_corrector(gec)
-
-    # Input data and get result
-    request = Request(text=source_text, language='et')
-    response = multi_corrector.process_request(request)
-    pprint(asdict(response))
-    return response.corrected_text
-
-
-if __name__ == '__main__':
-    print(run_multiple_correction_model("Aga kõik see jõud on suuredes linnades just sellepärast, et väiksetes kohtades on pigem eakad inimesed ja ei ole eriti kultuurielu."))
+if __name__ == "__main__":
+    sample_sentence = "Loodan, et meil kõik kätte sai."
+    corrected_text = correct_text(sample_sentence)
+    
+    if corrected_text:
+        print(f"Original: {sample_sentence}")
+        print(f"Corrected: {corrected_text}")
+        
+        correction_log = generate_correction_log(sample_sentence, corrected_text)
+        print(f"\nCorrections:\n{correction_log}")
+        
+        if correction_log:
+            first_correction = correction_log.split("\n")[0]
+            explanation = explain_correction(sample_sentence, corrected_text, correction_log, first_correction)
+            print(f"\nExplanation for first correction:\n{explanation}")
